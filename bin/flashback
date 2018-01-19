@@ -1,0 +1,41 @@
+#!/usr/bin/env python3.5
+# -*- coding: utf-8 -*-
+
+import argparse
+from .. import 
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='mysql flashback', epilog="Example : flashback -h 127.0.0.1 -p passwd -u user -P 3333", conflict_handler='resolve', add_help=True)
+
+    parser.add_argument('-u', '--user', dest="user", required=True, type=str, help="mysql user")
+    parser.add_argument('-p', '--password', dest="passwd", required=True, type=str, help="mysql passwd")
+    parser.add_argument('-P', '--port', dest="port", default=3306, nargs='?', type=int, help="mysql port default 3306")
+    parser.add_argument('-h', '--host', nargs='?', default='localhost', type=str, help="mysql host default localhost")
+
+    parser.add_argument('--start-file', type=str, help="analyze from this file")
+    parser.add_argument('--end-file', type=str, help="stop analyze until this fill")
+    parser.add_argument('--start-pos', type=int, help="start position")
+    parser.add_argument('--end-pos', type=int, help="end position")
+    parser.add_argument('--start-datetime', type=str, help="start time")
+    parser.add_argument('--end-datetime', type=str, help="end time")
+
+    parser.add_argument('-d', '--database', nargs='*', type=str, help="databases")
+    parser.add_argument('-D', '--skip-database', nargs='*', type=str, help="skip databases")
+
+    parser.add_argument('-t', '--table', nargs='*', type=str, help="tables")
+    parser.add_argument('-T', '--skip-table', nargs='*', type=str, help="skip tables")
+
+    parser.add_argument('-K', '--skip-pk', default=False, action='store_true', help="skip pk where insert")
+
+    parser.add_argument('--type', choices=('insert', 'delete', 'update'), type=str, help="rollback [insert, delete ...] sql")
+
+    # subparsers = parser.add_subparsers(help='sub-command help')
+    # parser_a = subparsers.add_parser('list', help='list sql')
+    # parser_a.add_argument('-c', '--count', type=int, help='list recent n sql')
+
+    try:
+        res = parser.parse_args()
+        print(res._get_kwargs())
+    except Exception as e:
+        print(e)
