@@ -62,6 +62,7 @@ class Table(object):
         self.table_id = table_id
         self.charset = None
         self.db_name = db_name
+        self.pk = 'id'
         self.table_name = table_name
         self.columns = []
 
@@ -118,7 +119,6 @@ class Column(object):
         )
 
     def parse(self, data):
-        # print(self.data_type)
         _field = ''
         if self.data_type == field_types.LONG:
             _field = signed(bytes2int(data.read(4)), 4)
@@ -304,28 +304,38 @@ class TableMapEvent(BinlogEvent):
     def __init__(self, header, body):
         super(TableMapEvent, self).__init__(header, body)
         self.table_id = int.from_bytes(body.table_id, 'little')
-        variable_data = BytesIO(body.variable_part)
-        db_name_len = byte2int8(variable_data.read(1))
-        self.db_name = variable_data.read(db_name_len)
-        variable_data.read(1)
-        tb_name_len = byte2int8(variable_data.read(1))
-        self.tb_name = variable_data.read(tb_name_len)
-        variable_data.read(1)
-        self.columns_len = byte2int8(variable_data.read(1))
+        self.variable_data = BytesIO(body.variable_part)
+        db_name_len = byte2int8(self.variable_data.read(1))
+        self.db_name = self.variable_data.read(db_name_len)
+        self.variable_data.read(1)
+        tb_name_len = byte2int8(self.variable_data.read(1))
+        self.tb_name = self.variable_data.read(tb_name_len)
+        self.variable_data.read(1)
+        self.columns_len = byte2int8(self.variable_data.read(1))
+        self.skip_databases = []
+        self.skip_tables = []
 
+    def parse(self):
+        variable_data = self.variable_data
         db_columns_info = get_columns_info_from_db(self.db_name.decode(), self.tb_name.decode())
         field_list = list(variable_data.read(self.columns_len))
         self.metadata_len = byte2int8(variable_data.read(1))
 
-        if not self.tables_map.get(self.table_id):
+        if not self.tables_map.get(self.table_id) and \
+            self.db_name.decode() not in self.skip_databases and \
+            self.tb_name.decode() not in self.skip_tables:
+
             _table = Table(self.table_id, self.db_name, self.tb_name)
 
             for i, val in enumerate(field_list):
                 _col = 'column_' + str(i + 1)
-                _column_name, _charset = db_columns_info.get(_col, (_col, None))
+                _column_name, _charset, is_pk = db_columns_info.get(_col, (_col, None))
                 _column = Column(_column_name)
                 _column.data_type = val
                 _column.charset = _charset
+
+                if is_pk:
+                    _table.pk = _column_name
 
                 if val == field_types.VARCHAR:
                     _column.meta_len = byte2int16(variable_data.read(2))
@@ -361,167 +371,194 @@ class TableMapEvent(BinlogEvent):
 class WriteRowsEvent(BinlogEvent):
     def __init__(self, header, body):
         super(WriteRowsEvent, self).__init__(header, body)
-        variable_data = BytesIO(body.variable_part)
+        # self.body = body
+        table_id = byte2int48(body.table_id)
+        self._table = self.tables_map.get(table_id)
+        self.skip = False
+
+        if self._table:
+            self.tb_name = self._table.table_name.decode()
+            self.db_name = self._table.db_name.decode()
+            self.row_data = {}
+        else:
+            self.skip = True
+
+    def _dump_variable(self):
+        variable_data = BytesIO(self.body.variable_part)
         columns_len = byte2int8(variable_data.read(1))
         columns_is_used = bytes2int(variable_data.read((columns_len + 7) // 8))
         columns_is_null = bytes2int(variable_data.read((columns_len + 7) // 8))
-
-        table_id = byte2int48(body.table_id)
-        _table = self.tables_map.get(table_id)
-        self.tb_name = _table.table_name.decode()
-        self.db_name = _table.db_name.decode()
-
-        columns = _table.columns
+        columns = self._table.columns
 
         index = 0
-        # fields = {}
         fields = []
         field_list_len = len(columns)
-        # print(columns)
         while columns_is_null >= 0 and index < field_list_len:
             if columns_is_null % 2 == 0:
-                # fields[index] = columns[index]
                 fields.append(columns[index])
             columns_is_null //= 2
             index += 1
 
-        # keys = []
-        # values = []
-        self.row_data = {}
-
         for _index, field in enumerate(fields):
-            # print('index = ', _index, 'field = ', field)
             _field = field.parse(variable_data)
-            # values.append(_field)
-            # print(_field)
-            # keys.append('{{{index}}}'.format(index=field.column_name))
             self.row_data[field.column_name] = _field
 
     def dumps(self):
-        return [self.db_name, self.tb_name, 'insert', self.row_data]
+        if not self.skip:
+            self._dump_variable()
+            return [self.db_name, self.tb_name, 'insert', self.row_data]
+        return []
+
+    def rollback_sql(self):
+        if not self.skip:
+            self._dump_variable()
+            _pk = self.row_data.get(self._table.pk)
+            if isinstance(_pk, str):
+                _pk = '"{}"'.format(_pk)
+            sql = 'delete from `%s`.`%s` where %s = %s' % (self.db_name, self.tb_name, self._table.pk, _pk)
+            return sql
+        return ''
 
 
 class DeleteRowsEvent(BinlogEvent):
     def __init__(self, header, body):
         super(DeleteRowsEvent, self).__init__(header, body)
-        variable_data = BytesIO(body.variable_part)
+        # self.body = body
+        table_id = byte2int48(self.body.table_id)
+        self._table = self.tables_map.get(table_id)
+        self.skip = False
+
+        if self._table:
+            self.tb_name = self._table.table_name.decode()
+            self.db_name = self._table.db_name.decode()
+            self.row_data = {}
+        else:
+            self.skip = True
+
+    def _dump_variable(self):
+        variable_data = BytesIO(self.body.variable_part)
         columns_len = byte2int8(variable_data.read(1))
         columns_is_used = bytes2int(variable_data.read((columns_len + 7) // 8))
         columns_is_null = bytes2int(variable_data.read((columns_len + 7) // 8))
 
-        table_id = byte2int48(body.table_id)
-        _table = self.tables_map.get(table_id)
-        self.tb_name = _table.table_name.decode()
-        self.db_name = _table.db_name.decode()
-
-        columns = _table.columns
+        columns = self._table.columns
 
         index = 0
-        # fields = {}
         fields = []
         field_list_len = len(columns)
-        # print(columns)
         while columns_is_null >= 0 and index < field_list_len:
             if columns_is_null % 2 == 0:
-                # fields[index] = columns[index]
                 fields.append(columns[index])
             columns_is_null //= 2
             index += 1
 
-        # keys = []
-        # values = []
-        self.row_data = {}
-
         for _index, field in enumerate(fields):
-            # print('index = ', _index, 'field = ', field)
             _field = field.parse(variable_data)
-            # values.append(_field)
-            # print(_field)
-            # keys.append('{{{index}}}'.format(index=field.column_name))
             self.row_data[field.column_name] = _field
 
     def dumps(self):
-        return [self.db_name, self.tb_name, 'delete', self.row_data]
+        if not self.skip:
+            self._dump_variable()
+            return [self.db_name, self.tb_name, 'delete', self.row_data]
+        return []
+
+    def rollback_sql(self):
+        if not self.skip:
+            self._dump_variable()
+            _keys = self.row_data.keys()
+            _values = self.row_data.values()
+
+            _keys_str = ','.join(map(lambda x: '`{}`'.format(x), _keys))
+            _values_str = []
+            for val in _values:
+                if isinstance(val, Decimal):
+                    _values_str.append(str(val))
+                elif isinstance(val, str):
+                    _values_str.append('"{}"'.format(str(val)))
+            _values_str = ','.join(_values_str)
+
+            sql = 'insert into `%s`.`%s`(%s) values (%s)' % (self.db_name, self.tb_name, _keys_str, _values_str)
+            return sql
+        return ''
 
 
 class UpdateRowsEvent(BinlogEvent):
     def __init__(self, header, body):
         super(UpdateRowsEvent, self).__init__(header, body)
-        variable_data = BytesIO(body.variable_part)
-        table_id = byte2int48(body.table_id)
-        _table = self.tables_map.get(table_id)
+        # self.body = body
+        table_id = byte2int48(self.body.table_id)
+        self._table = self.tables_map.get(table_id)
+        self.skip = False
 
+        if self._table:
+            self.tb_name = self._table.table_name.decode()
+            self.db_name = self._table.db_name.decode()
+
+            self.before_row_data = {}
+            self.row_data = {}
+        else:
+            self.skip = True
+
+    def _dump_variable(self):
+        variable_data = BytesIO(self.body.variable_part)
         columns_len = byte2int8(variable_data.read(1))
         columns_is_used = bytes2int(variable_data.read((columns_len + 7) // 8))
         columns_is_used_update = bytes2int(variable_data.read((columns_len + 7) // 8))
         columns_is_null = bytes2int(variable_data.read((columns_len + 7) // 8))
 
-        self.tb_name = _table.table_name.decode()
-        self.db_name = _table.db_name.decode()
-        print('db_name = ', self.db_name, ' tb_name = ', self.tb_name)
-
-        columns = _table.columns
+        columns = self._table.columns
         index = 0
-        # fields = {}
         fields = []
         field_list_len = len(columns)
-        # print(columns)
         while columns_is_null >= 0 and index < field_list_len:
             if columns_is_null % 2 == 0:
-                # fields[index] = columns[index]
                 fields.append(columns[index])
             columns_is_null //= 2
             index += 1
 
-        # keys = []
-        # values = []
-        self.before_row_data = {}
-
         for _index, field in enumerate(fields):
-            # print('index = ', _index, 'field = ', field)
             _field = field.parse(variable_data)
-            # values.append(_field)
-            # print(_field)
-            # keys.append('{{{index}}}'.format(index=_index))
             self.before_row_data[field.column_name] = _field
-        # print(keys)
-        # print(values)
 
         columns_is_null = bytes2int(variable_data.read((columns_len + 7) // 8))
         index = 0
-        # fields = {}
         fields = []
         field_list_len = len(columns)
-        # print(columns)
-
-        # if self.tb_name == 'jupiter_cl_m1_cycle':
-        #     print(self.before_row_data)
-        #     print(list(variable_data.read(1000)))
-        #     exit()
 
         while columns_is_null >= 0 and index < field_list_len:
             if columns_is_null % 2 == 0:
-                # fields[index] = columns[index]
                 fields.append(columns[index])
             columns_is_null //= 2
             index += 1
 
-        # keys = []
-        # values = []
-        self.row_data = {}
-
         for _index, field in enumerate(fields):
-            # print('index = ', _index, 'field = ', field)
             _field = field.parse(variable_data)
-            # values.append(_field)
-            # print(_field)
-            # keys.append('{{{index}}}'.format(index=field.column_name))
             self.row_data[field.column_name] = _field
-        # print(keys)
-        # print(values)
 
     def dumps(self):
-        return [self.db_name, self.tb_name, 'update', self.before_row_data, self.row_data]
+        if not self.skip:
+            self._dump_variable()
+            return [self.db_name, self.tb_name, 'update', self.before_row_data, self.row_data]
+        return []
+
+    def rollback_sql(self):
+        if not self.skip:
+            self._dump_variable()
+            val_sql = []
+            for key, val in self.before_row_data.items():
+                if isinstance(val, str):
+                    val_sql.append('%s = "%s"' % (key, val))
+                elif isinstance(val, Decimal):
+                    val_sql.append('%s = %s' % (key, str(val)))
+
+            val_sql = ', '.join(val_sql)
+            _pk = self.row_data.get(self._table.pk)
+            if isinstance(_pk, str):
+                _pk = '"{}"'.format(_pk)
+
+            sql = 'update table `%s`.`%s` set %s where %s = %s' % (self.db_name, self.tb_name, val_sql, self._table.pk, _pk)
+            return sql
+        return ''
 
 
 event_types = LookupDict(name="event_types")

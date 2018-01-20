@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-from .. import 
+from mybinlog.main import MyBinlog
 
 
-if __name__ == '__main__':
+def _args_parser():
     parser = argparse.ArgumentParser(description='mysql flashback', epilog="Example : flashback -h 127.0.0.1 -p passwd -u user -P 3333", conflict_handler='resolve', add_help=True)
 
     parser.add_argument('-u', '--user', dest="user", required=True, type=str, help="mysql user")
@@ -21,21 +21,37 @@ if __name__ == '__main__':
     parser.add_argument('--end-datetime', type=str, help="end time")
 
     parser.add_argument('-d', '--database', nargs='*', type=str, help="databases")
-    parser.add_argument('-D', '--skip-database', nargs='*', type=str, help="skip databases")
+    parser.add_argument('-D', '--skip-databases', nargs='*', type=str, help="skip databases")
 
     parser.add_argument('-t', '--table', nargs='*', type=str, help="tables")
-    parser.add_argument('-T', '--skip-table', nargs='*', type=str, help="skip tables")
+    parser.add_argument('-T', '--skip-tables', nargs='*', type=str, help="skip tables")
 
     parser.add_argument('-K', '--skip-pk', default=False, action='store_true', help="skip pk where insert")
 
     parser.add_argument('--type', choices=('insert', 'delete', 'update'), type=str, help="rollback [insert, delete ...] sql")
+    parser.add_argument('--server-id', default=1, type=int, help="server id default 1")
 
     # subparsers = parser.add_subparsers(help='sub-command help')
     # parser_a = subparsers.add_parser('list', help='list sql')
     # parser_a.add_argument('-c', '--count', type=int, help='list recent n sql')
+    parser.add_argument('--list', default=False, action='store_true', help="show events")
+    parser.add_argument('--rollback', default=False, action='store_true', help="show events")
 
+    res = parser.parse_args()
+    # print(res)
+    # exit()
+
+    return res
+
+
+if __name__ == '__main__':
     try:
-        res = parser.parse_args()
-        print(res._get_kwargs())
+        kwargs = dict(_args_parser()._get_kwargs())
+        mybin = MyBinlog(**kwargs)
+        conn = mybin.connect_db()
+
+        if conn:
+            mybin.read_event_from_remote()
     except Exception as e:
         print(e)
+    # MyBinlog()

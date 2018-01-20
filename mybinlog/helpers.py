@@ -61,11 +61,11 @@ def get_columns_info_from_db(db_name, table_name):
     res = {}
     try:
         with conn.cursor() as cursor:
-            sql = "select column_name, ordinal_position, character_set_name from information_schema.`columns` where table_schema = '%s' and table_name = '%s'" % (db_name, table_name)
+            sql = "select column_name, ordinal_position, character_set_name, column_key from information_schema.`columns` where table_schema = '%s' and table_name = '%s'" % (db_name, table_name)
             cursor.execute(sql)
             result = cursor.fetchall()
             for _res in result:
-                res['column_' + str(_res['ordinal_position'])] = [_res.get('column_name'), _res.get('character_set_name')]
+                res['column_' + str(_res['ordinal_position'])] = [_res.get('column_name'), _res.get('character_set_name'), _res.get('column_key')]
     except Exception as e:
         print(e)
 
