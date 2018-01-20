@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import struct
-from mybinlog.db_manager import get_conn
 
 
 class LookupDict(dict):
@@ -56,8 +55,7 @@ def signed(unsigned_num, size):
         return unsigned_num
 
 
-def get_columns_info_from_db(db_name, table_name):
-    conn = get_conn()
+def get_columns_info_from_db(db_name, table_name, conn):
     res = {}
     try:
         with conn.cursor() as cursor:

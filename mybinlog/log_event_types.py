@@ -12,6 +12,7 @@ from . import field_types
 import struct
 import re
 from decimal import Decimal
+import time
 
 
 _event_types = {
@@ -285,7 +286,7 @@ class QueryEvent(BinlogEvent):
         db_name_len = byte2int8(body.db_name_len)
         self.db_name = variable_data.read(db_name_len)
         variable_data.read(1)
-        self.query = variable_data.read(len_variable_data - status_block_len - db_name_len - 1 - self.crc_len)
+        self.query = variable_data.read(len_variable_data - status_block_len - db_name_len - self.crc_len)
         _query = self.query.decode('utf-8')
         _query_re = re.search(r'alter +table +(.*?) .*', _query)
         if _query_re:
@@ -314,10 +315,11 @@ class TableMapEvent(BinlogEvent):
         self.columns_len = byte2int8(self.variable_data.read(1))
         self.skip_databases = []
         self.skip_tables = []
+        self.conn = None
 
     def parse(self):
         variable_data = self.variable_data
-        db_columns_info = get_columns_info_from_db(self.db_name.decode(), self.tb_name.decode())
+        db_columns_info = get_columns_info_from_db(self.db_name.decode(), self.tb_name.decode(), self.conn)
         field_list = list(variable_data.read(self.columns_len))
         self.metadata_len = byte2int8(variable_data.read(1))
 
@@ -329,7 +331,7 @@ class TableMapEvent(BinlogEvent):
 
             for i, val in enumerate(field_list):
                 _col = 'column_' + str(i + 1)
-                _column_name, _charset, is_pk = db_columns_info.get(_col, (_col, None))
+                _column_name, _charset, is_pk = db_columns_info.get(_col, (_col, None, None))
                 _column = Column(_column_name)
                 _column.data_type = val
                 _column.charset = _charset
@@ -409,6 +411,35 @@ class WriteRowsEvent(BinlogEvent):
             return [self.db_name, self.tb_name, 'insert', self.row_data]
         return []
 
+    def excute_info(self):
+        if not self.skip:
+            self._dump_variable()
+            _keys = self.row_data.keys()
+            _values = self.row_data.values()
+
+            _keys_str = ','.join(map(lambda x: '`{}`'.format(x), _keys))
+            _values_str = []
+            for val in _values:
+                if isinstance(val, Decimal):
+                    _values_str.append(str(val))
+                elif isinstance(val, str):
+                    _values_str.append('"{}"'.format(str(val)))
+                else:
+                    _values_str.append(str(val))
+            _values_str = ','.join(_values_str)
+
+            sql = 'insert into `%s`.`%s`(%s) values (%s)' % (self.db_name, self.tb_name, _keys_str, _values_str)
+
+            _timestamp = time.strftime('%Y-%m-%d %H:%M', time.localtime(self.header.timestamp))
+            return {
+                "timestamp": _timestamp,
+                # "next_position": self.header.next_position,
+                # "event_length": self.header.event_length,
+                "position": self.header.next_position - self.header.event_length,
+                "sql": sql
+            }
+        return {}
+
     def rollback_sql(self):
         if not self.skip:
             self._dump_variable()
@@ -462,6 +493,23 @@ class DeleteRowsEvent(BinlogEvent):
             return [self.db_name, self.tb_name, 'delete', self.row_data]
         return []
 
+    def excute_info(self):
+        if not self.skip:
+            self._dump_variable()
+            _pk = self.row_data.get(self._table.pk)
+            if isinstance(_pk, str):
+                _pk = '"{}"'.format(_pk)
+            sql = 'delete from `%s`.`%s` where %s = %s' % (self.db_name, self.tb_name, self._table.pk, _pk)
+            _timestamp = time.strftime('%Y-%m-%d %H:%M', time.localtime(self.header.timestamp))
+            return {
+                "timestamp": _timestamp,
+                "next_position": self.header.next_position,
+                "event_length": self.header.event_length,
+                "position": self.header.next_position - self.header.event_length,
+                "sql": sql
+            }
+        return {}
+
     def rollback_sql(self):
         if not self.skip:
             self._dump_variable()
@@ -475,6 +523,8 @@ class DeleteRowsEvent(BinlogEvent):
                     _values_str.append(str(val))
                 elif isinstance(val, str):
                     _values_str.append('"{}"'.format(str(val)))
+                else:
+                    _values_str.append(str(val))
             _values_str = ','.join(_values_str)
 
             sql = 'insert into `%s`.`%s`(%s) values (%s)' % (self.db_name, self.tb_name, _keys_str, _values_str)
@@ -541,6 +591,34 @@ class UpdateRowsEvent(BinlogEvent):
             return [self.db_name, self.tb_name, 'update', self.before_row_data, self.row_data]
         return []
 
+    def excute_info(self):
+        if not self.skip:
+            self._dump_variable()
+            val_sql = []
+            for key, val in self.row_data.items():
+                if isinstance(val, str):
+                    val_sql.append('%s = "%s"' % (key, val))
+                # elif isinstance(val, Decimal):
+                else:
+                    val_sql.append('%s = %s' % (key, str(val)))
+
+            val_sql = ', '.join(val_sql)
+            _pk = self.before_row_data.get(self._table.pk)
+            if isinstance(_pk, str):
+                _pk = '"{}"'.format(_pk)
+            # print(val_sql)
+
+            sql = 'update table `%s`.`%s` set %s where %s = %s' % (self.db_name, self.tb_name, val_sql, self._table.pk, _pk)
+            _timestamp = time.strftime('%Y-%m-%d %H:%M', time.localtime(self.header.timestamp))
+            return {
+                "timestamp": _timestamp,
+                # "next_position": self.header.next_position,
+                # "event_length": self.header.event_length,
+                "position": self.header.next_position - self.header.event_length,
+                "sql": sql
+            }
+        return {}
+
     def rollback_sql(self):
         if not self.skip:
             self._dump_variable()
@@ -548,7 +626,8 @@ class UpdateRowsEvent(BinlogEvent):
             for key, val in self.before_row_data.items():
                 if isinstance(val, str):
                     val_sql.append('%s = "%s"' % (key, val))
-                elif isinstance(val, Decimal):
+                # elif isinstance(val, Decimal):
+                else:
                     val_sql.append('%s = %s' % (key, str(val)))
 
             val_sql = ', '.join(val_sql)

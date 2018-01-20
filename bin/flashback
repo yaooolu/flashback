@@ -3,6 +3,7 @@
 
 import argparse
 from mybinlog.main import MyBinlog
+from datetime import datetime
 
 
 def _args_parser():
@@ -17,8 +18,8 @@ def _args_parser():
     parser.add_argument('--end-file', type=str, help="stop analyze until this fill")
     parser.add_argument('--start-pos', type=int, help="start position")
     parser.add_argument('--end-pos', type=int, help="end position")
-    parser.add_argument('--start-datetime', type=str, help="start time")
-    parser.add_argument('--end-datetime', type=str, help="end time")
+    parser.add_argument('--start-datetime', type=str, help="start datetime fromat YYYY-mm-dd HH:MM")
+    parser.add_argument('--end-datetime', type=str, help="end datetime fromat YYYY-mm-dd HH:MM")
 
     parser.add_argument('-d', '--database', nargs='*', type=str, help="databases")
     parser.add_argument('-D', '--skip-databases', nargs='*', type=str, help="skip databases")
@@ -34,7 +35,7 @@ def _args_parser():
     # subparsers = parser.add_subparsers(help='sub-command help')
     # parser_a = subparsers.add_parser('list', help='list sql')
     # parser_a.add_argument('-c', '--count', type=int, help='list recent n sql')
-    parser.add_argument('--list', default=False, action='store_true', help="show events")
+    parser.add_argument('--list', default=True, action='store_true', help="show events")
     parser.add_argument('--rollback', default=False, action='store_true', help="show events")
 
     res = parser.parse_args()
@@ -47,6 +48,13 @@ def _args_parser():
 if __name__ == '__main__':
     try:
         kwargs = dict(_args_parser()._get_kwargs())
+        try:
+            if kwargs.get('start_datetime'):
+                _date = datetime.strptime(kwargs.get('start_datetime'), '%Y-%m-%d %H:%M')
+                kwargs['start_datetime'] = _date.timestamp()
+        except:
+            raise Exception('datetime format error example [2017-01-01 10:11]')
+
         mybin = MyBinlog(**kwargs)
         conn = mybin.connect_db()
 

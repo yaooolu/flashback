@@ -16,30 +16,30 @@ from pymysql.util import int2byte
 from pymysql.constants.COMMAND import COM_BINLOG_DUMP, COM_REGISTER_SLAVE
 
 
-def _parse_file(file, pos=0):
-    event = Event.from_file(file, pos)
-    e = event.all()
+# def _parse_file(file, pos=0):
+#     event = Event.from_file(file, pos)
+#     e = event.all()
 
-    for header, body in e:
-        type_name = event_types.get(int.from_bytes(header.type_code, 'little'))
-        if type_name == 'QueryEvent':
-            _event = QueryEvent(header, body)
+#     for header, body in e:
+#         type_name = event_types.get(int.from_bytes(header.type_code, 'little'))
+#         if type_name == 'QueryEvent':
+#             _event = QueryEvent(header, body)
 
-        elif type_name == 'TableMapEvent':
-            _event = TableMapEvent(header, body)
-            # print(_event.dumps())
+#         elif type_name == 'TableMapEvent':
+#             _event = TableMapEvent(header, body)
+#             # print(_event.dumps())
 
-        elif type_name == 'WriteRowsEvent':
-            _event = WriteRowsEvent(header, body)
-            print(_event.dumps())
+#         elif type_name == 'WriteRowsEvent':
+#             _event = WriteRowsEvent(header, body)
+#             print(_event.dumps())
 
-        elif type_name == 'UpdateRowsEvent':
-            _event = UpdateRowsEvent(header, body)
-            print(_event.dumps())
+#         elif type_name == 'UpdateRowsEvent':
+#             _event = UpdateRowsEvent(header, body)
+#             print(_event.dumps())
 
-        elif type_name == 'DeleteRowsEvent':
-            _event = DeleteRowsEvent(header, body)
-            print(_event.dumps())
+#         elif type_name == 'DeleteRowsEvent':
+#             _event = DeleteRowsEvent(header, body)
+#             print(_event.dumps())
 
 
 class MyBinlog(object):
@@ -132,44 +132,55 @@ class MyBinlog(object):
                 raise Exception('remote server binlog not start')
 
         self.__com_binlog_dump()
-        import time
 
         while True:
-            mockdata = BytesIO(self.conn._read_packet().read_all())
+            _packet_data = self.conn._read_packet().read_all()
+            if _packet_data[0] == 0xfe:
+                # b'\xfe\x00\x00\x00\x00'
+                return
+            mockdata = BytesIO(_packet_data)
             header, body = Event(mockdata).parse()
 
+            if self.start_datetime and (self.start_datetime > header.timestamp):
+                continue
+
+            if self.end_datetime and (self.end_datetime < header.timestamp):
+                break
+
             type_name = event_types.get(int.from_bytes(header.type_code, 'little'))
+            _event = None
 
             if type_name == 'QueryEvent':
                 _event = QueryEvent(header, body)
+                print(_event)
 
             elif type_name == 'TableMapEvent':
                 _event = TableMapEvent(header, body)
                 _event.skip_databases = self.skip_databases
                 _event.skip_tables = self.skip_tables
+                _event.conn = self.conn
                 _event.parse()
+                # print(_event.header.next_position)
 
             elif type_name == 'WriteRowsEvent':
                 _event = WriteRowsEvent(header, body)
-                # if _event.tb_name not in self.skip_table:
-                    # print(_event.dumps())
-                print(_event.rollback_sql())
+                if self.list:
+                    print(_event.excute_info())
+                elif self.rollback:
+                    cur.execute(_event.rollback_sql())
 
             elif type_name == 'UpdateRowsEvent':
                 _event = UpdateRowsEvent(header, body)
-                # if _event.tb_name not in self.skip_table:
-                    # print(_event.dumps())
-                print(_event.rollback_sql())
+                if self.list:
+                    print(_event.excute_info())
+                elif self.rollback:
+                    cur.execute(_event.rollback_sql())
 
             elif type_name == 'DeleteRowsEvent':
                 _event = DeleteRowsEvent(header, body)
-                # if _event.tb_name not in self.skip_table:
-                    # print(_event.dumps())
-                print(_event.rollback_sql())
+                if self.list:
+                    print(_event.excute_info())
+                elif self.rollback:
+                    cur.execute(_event.rollback_sql())
 
-            time.sleep(0.1)
-
-
-# if __name__ == '__main__':
-#     file = open('/usr/local/Cellar/mysql/5.6.26/data/mysql-bin.000002', 'rb')
-#     _parse(file)
+        cur.close()
