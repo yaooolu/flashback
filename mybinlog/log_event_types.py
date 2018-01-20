@@ -302,7 +302,7 @@ class QueryEvent(BinlogEvent):
 
 
 class TableMapEvent(BinlogEvent):
-    def __init__(self, header, body):
+    def __init__(self, header, body, binlog_obj):
         super(TableMapEvent, self).__init__(header, body)
         self.table_id = int.from_bytes(body.table_id, 'little')
         self.variable_data = BytesIO(body.variable_part)
@@ -313,13 +313,14 @@ class TableMapEvent(BinlogEvent):
         self.tb_name = self.variable_data.read(tb_name_len)
         self.variable_data.read(1)
         self.columns_len = byte2int8(self.variable_data.read(1))
-        self.skip_databases = []
-        self.skip_tables = []
-        self.conn = None
+        self.skip_databases = binlog_obj.skip_databases or []
+        self.skip_tables = binlog_obj.skip_tables or []
+
+        self.db_info = (binlog_obj.user, binlog_obj.passwd, binlog_obj.host, binlog_obj.port)
 
     def parse(self):
         variable_data = self.variable_data
-        db_columns_info = get_columns_info_from_db(self.db_name.decode(), self.tb_name.decode(), self.conn)
+        db_columns_info = get_columns_info_from_db(self.db_name.decode(), self.tb_name.decode(), self.db_info)
         field_list = list(variable_data.read(self.columns_len))
         self.metadata_len = byte2int8(variable_data.read(1))
 
@@ -430,7 +431,7 @@ class WriteRowsEvent(BinlogEvent):
 
             sql = 'insert into `%s`.`%s`(%s) values (%s)' % (self.db_name, self.tb_name, _keys_str, _values_str)
 
-            _timestamp = time.strftime('%Y-%m-%d %H:%M', time.localtime(self.header.timestamp))
+            _timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.header.timestamp))
             return {
                 "timestamp": _timestamp,
                 # "next_position": self.header.next_position,
@@ -500,7 +501,7 @@ class DeleteRowsEvent(BinlogEvent):
             if isinstance(_pk, str):
                 _pk = '"{}"'.format(_pk)
             sql = 'delete from `%s`.`%s` where %s = %s' % (self.db_name, self.tb_name, self._table.pk, _pk)
-            _timestamp = time.strftime('%Y-%m-%d %H:%M', time.localtime(self.header.timestamp))
+            _timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.header.timestamp))
             return {
                 "timestamp": _timestamp,
                 "next_position": self.header.next_position,
@@ -608,8 +609,8 @@ class UpdateRowsEvent(BinlogEvent):
                 _pk = '"{}"'.format(_pk)
             # print(val_sql)
 
-            sql = 'update table `%s`.`%s` set %s where %s = %s' % (self.db_name, self.tb_name, val_sql, self._table.pk, _pk)
-            _timestamp = time.strftime('%Y-%m-%d %H:%M', time.localtime(self.header.timestamp))
+            sql = 'update `%s`.`%s` set %s where %s = %s' % (self.db_name, self.tb_name, val_sql, self._table.pk, _pk)
+            _timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.header.timestamp))
             return {
                 "timestamp": _timestamp,
                 # "next_position": self.header.next_position,
@@ -635,9 +636,16 @@ class UpdateRowsEvent(BinlogEvent):
             if isinstance(_pk, str):
                 _pk = '"{}"'.format(_pk)
 
-            sql = 'update table `%s`.`%s` set %s where %s = %s' % (self.db_name, self.tb_name, val_sql, self._table.pk, _pk)
+            sql = 'update `%s`.`%s` set %s where %s = %s' % (self.db_name, self.tb_name, val_sql, self._table.pk, _pk)
             return sql
         return ''
+
+
+class RotateEvent(BinlogEvent):
+    def __init__(self, header, body):
+        super(RotateEvent, self).__init__(header, body)
+        first_event_pos = self.body.first_event_pos
+        variable_data = BytesIO(self.body.variable_part)
 
 
 event_types = LookupDict(name="event_types")

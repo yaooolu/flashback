@@ -22,7 +22,7 @@ query_event = [
 
 
 rotate_event = [
-    ('<q', 'frist_event_pos'),
+    ('<Q', 'first_event_pos')
 ]
 
 

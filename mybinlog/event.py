@@ -16,6 +16,7 @@ class Event(object):
         type_code = int.from_bytes(header.type_code, 'little')
         if event_types[type_code] == "StopEvent":
             return
+
         body = globals().get(event_types.get(type_code), EventNotDefined).from_file(self.file, length=header.event_length - header.struct_size)
 
         return (header, body)

@@ -7,13 +7,15 @@ from mybinlog.log_event_types import (
     TableMapEvent,
     WriteRowsEvent,
     UpdateRowsEvent,
-    DeleteRowsEvent
+    DeleteRowsEvent,
+    RotateEvent
 )
-import pymysql
+# import pymysql
 import struct
 from io import BytesIO
 from pymysql.util import int2byte
 from pymysql.constants.COMMAND import COM_BINLOG_DUMP, COM_REGISTER_SLAVE
+from .db_manager import ConnectionPool
 
 
 # def _parse_file(file, pos=0):
@@ -68,9 +70,20 @@ class MyBinlog(object):
         self.list = kwargs.get('list')
         self.rollback = kwargs.get('rollback')
 
+        if self.rollback:
+            self.list = False
+
     def connect_db(self):
+        """
+            not thread safe
+        """
         try:
-            self.conn = pymysql.connect(host=self.host, password=self.passwd, user=self.user, port=self.port)
+            # self.conn = pymysql.connect(host=self.host, password=self.passwd, user=self.user, port=self.port, charset='utf8mb4')
+            # def __init__(self, host, user, password, port, database, pool_size=10, charset='utf8mb4'):
+            self.conn_pool = ConnectionPool(self.host, self.user, self.passwd, self.port)
+            self.conn = self.conn_pool._pool.pop()
+            # self.conn.autocommit(1)
+
             return self.conn
         except Exception as err:
             raise Exception('mysql connect error !! error_code = %s, error_msg = %s' % err.args)
@@ -84,6 +97,10 @@ class MyBinlog(object):
 
         self.conn._write_bytes(prelude)
         self.conn._next_seq_id = 1
+
+        # for conn in self.conn_pool.get_conn():
+        #     conn._write_bytes(prelude)
+        #     conn._next_seq_id = 1
 
     def __mock_slave(self, server_id, master_id=0):
         lhostname = len(self.host.encode())
@@ -121,10 +138,12 @@ class MyBinlog(object):
         self.__mock_slave(self.server_id)
         cur = self.conn.cursor()
         cur.execute("set @master_binlog_checksum= @@global.binlog_checksum")
-
+        # self.conn.execute("set @master_binlog_checksum= @@global.binlog_checksum")
         if not self.start_file:
             cur.execute("show master status")
             _row = cur.fetchone()
+            # _rows = self.conn_pool.execute("show master status")
+            # _row = _rows[0]
             if _row:
                 binlog_file, pos = _row[:2]
                 self.start_file = binlog_file
@@ -152,35 +171,38 @@ class MyBinlog(object):
 
             if type_name == 'QueryEvent':
                 _event = QueryEvent(header, body)
-                print(_event)
+                # print(_event)
 
             elif type_name == 'TableMapEvent':
-                _event = TableMapEvent(header, body)
-                _event.skip_databases = self.skip_databases
-                _event.skip_tables = self.skip_tables
-                _event.conn = self.conn
+                _event = TableMapEvent(header, body, self)
+                # _event.skip_databases = self.skip_databases
+                # _event.skip_tables = self.skip_tables
+                # _event.conn = self.conn
                 _event.parse()
-                # print(_event.header.next_position)
 
             elif type_name == 'WriteRowsEvent':
                 _event = WriteRowsEvent(header, body)
                 if self.list:
                     print(_event.excute_info())
                 elif self.rollback:
-                    cur.execute(_event.rollback_sql())
+                    self.conn_pool.execute(_event.rollback_sql())
 
             elif type_name == 'UpdateRowsEvent':
                 _event = UpdateRowsEvent(header, body)
                 if self.list:
                     print(_event.excute_info())
                 elif self.rollback:
-                    cur.execute(_event.rollback_sql())
+                    self.conn_pool.execute(_event.rollback_sql())
 
             elif type_name == 'DeleteRowsEvent':
                 _event = DeleteRowsEvent(header, body)
                 if self.list:
                     print(_event.excute_info())
                 elif self.rollback:
-                    cur.execute(_event.rollback_sql())
+                    self.conn_pool.execute(_event.rollback_sql())
 
-        cur.close()
+            elif type_name == 'RotateEvent':
+                _event = RotateEvent(header, body)
+
+        # cur.close()
+        # self.conn.close()

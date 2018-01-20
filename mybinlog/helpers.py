@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import struct
+import pymysql
 
 
 class LookupDict(dict):
@@ -55,17 +56,21 @@ def signed(unsigned_num, size):
         return unsigned_num
 
 
-def get_columns_info_from_db(db_name, table_name, conn):
+def get_columns_info_from_db(db_name, table_name, db_info):
     res = {}
+    conn = pymysql.connect(user=db_info[0], password=db_info[1], host=db_info[2], port=db_info[3], charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor)
     try:
         with conn.cursor() as cursor:
             sql = "select column_name, ordinal_position, character_set_name, column_key from information_schema.`columns` where table_schema = '%s' and table_name = '%s'" % (db_name, table_name)
+
             cursor.execute(sql)
             result = cursor.fetchall()
             for _res in result:
                 res['column_' + str(_res['ordinal_position'])] = [_res.get('column_name'), _res.get('character_set_name'), _res.get('column_key')]
     except Exception as e:
         print(e)
+    finally:
+        conn.close()
 
     return res
 
