@@ -313,15 +313,44 @@ class TableMapEvent(BinlogEvent):
         self.tb_name = self.variable_data.read(tb_name_len)
         self.variable_data.read(1)
         self.columns_len = byte2int8(self.variable_data.read(1))
+
+        self.databases = binlog_obj.databases or []
+        self.tables = binlog_obj.tables or []
         self.skip_databases = binlog_obj.skip_databases or []
         self.skip_tables = binlog_obj.skip_tables or []
 
         self.db_info = (binlog_obj.user, binlog_obj.passwd, binlog_obj.host, binlog_obj.port)
 
+    def valid_tb(self, databases, tables, skip_databases, skip_tables):
+        _db_name = self.db_name.decode()
+        _tb_name = self.tb_name.decode()
+
+        if len(databases) > 0:
+            if len(tables) > 0:
+                return (_db_name in databases) and (_tb_name in tables)
+            elif len(skip_tables) > 0:
+                return (_db_name in databases) and (_tb_name not in skip_tables)
+            else:
+                return _db_name in databases
+        elif len(skip_databases) > 0:
+            if len(tables) > 0:
+                return (_db_name not in skip_databases) and (_tb_name in tables)
+            elif len(skip_tables) > 0:
+                return (_db_name not in skip_databases) and (_tb_name not in skip_tables)
+            else:
+                return _db_name not in skip_databases
+        else:
+            if len(tables) > 0:
+                return _tb_name in tables
+            elif len(skip_tables) > 0:
+                return _tb_name not in skip_tables
+            else:
+                return True
+
     def parse(self):
-        if not self.tables_map.get(self.table_id) and \
-            self.db_name.decode() not in self.skip_databases and \
-            self.tb_name.decode() not in self.skip_tables:
+        if not self.tables_map.get(self.table_id) and self.valid_tb(self.databases, self.tables, self.skip_databases, self.skip_tables):
+            # self.db_name.decode() not in self.skip_databases and \
+            # self.tb_name.decode() not in self.skip_tables:
             db_columns_info = get_columns_info_from_db(self.db_name.decode(), self.tb_name.decode(), self.db_info)
             variable_data = self.variable_data
             field_list = list(variable_data.read(self.columns_len))

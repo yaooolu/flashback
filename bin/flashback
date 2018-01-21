@@ -21,10 +21,10 @@ def _args_parser():
     parser.add_argument('--start-datetime', type=str, help="start datetime [fromat YYYY-mm-dd HH:MM:SS]")
     parser.add_argument('--end-datetime', type=str, help="end datetime fromat YYYY-mm-dd HH:MM:SS")
 
-    parser.add_argument('-d', '--database', nargs='*', type=str, help="databases")
+    parser.add_argument('-d', '--databases', nargs='*', type=str, help="only databases conflict with --skip-databases")
     parser.add_argument('-D', '--skip-databases', nargs='*', type=str, help="skip databases")
 
-    parser.add_argument('-t', '--table', nargs='*', type=str, help="tables")
+    parser.add_argument('-t', '--tables', nargs='*', type=str, help="only tables conflict with --skip-tables")
     parser.add_argument('-T', '--skip-tables', nargs='*', type=str, help="skip tables")
 
     parser.add_argument('-K', '--skip-pk', default=False, action='store_true', help="skip pk where insert")

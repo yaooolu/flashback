@@ -59,12 +59,12 @@ class MyBinlog(object):
         self.start_file = kwargs.get('start_file')
         self.end_datetime = kwargs.get('end_datetime')
         self.skip_pk = kwargs.get('skip_pk')
-        self.database = kwargs.get('database')
+        self.databases = kwargs.get('databases')
         self.start_pos = kwargs.get('start_pos')
         self.end_file = kwargs.get('end_file')
 
         self.dml_type = kwargs.get('type')
-        self.table = kwargs.get('table')
+        self.tables = kwargs.get('tables')
 
         self.server_id = kwargs.get('server_id')
         self.list = kwargs.get('list')
@@ -74,6 +74,11 @@ class MyBinlog(object):
             self.list = False
         if self.dml_type == 'insert':
             self.dml_type = 'write'
+
+        if self.databases:
+            self.skip_databases = []
+        if self.tables:
+            self.skip_tables = []
 
     def connect_db(self):
         """
@@ -188,21 +193,27 @@ class MyBinlog(object):
             elif type_name == 'WriteRowsEvent':
                 _event = WriteRowsEvent(header, body)
                 if self.list:
-                    print(_event.excute_info())
+                    _info = _event.excute_info()
+                    if _info:
+                        print(_info)
                 elif self.rollback:
                     self.conn_pool.execute(_event.rollback_sql())
 
             elif type_name == 'UpdateRowsEvent':
                 _event = UpdateRowsEvent(header, body)
                 if self.list:
-                    print(_event.excute_info())
+                    _info = _event.excute_info()
+                    if _info:
+                        print(_info)
                 elif self.rollback:
                     self.conn_pool.execute(_event.rollback_sql())
 
             elif type_name == 'DeleteRowsEvent':
                 _event = DeleteRowsEvent(header, body, self)
                 if self.list:
-                    print(_event.excute_info())
+                    _info = _event.excute_info()
+                    if _info:
+                        print(_info)
                 elif self.rollback:
                     self.conn_pool.execute(_event.rollback_sql())
 
