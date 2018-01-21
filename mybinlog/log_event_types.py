@@ -319,14 +319,13 @@ class TableMapEvent(BinlogEvent):
         self.db_info = (binlog_obj.user, binlog_obj.passwd, binlog_obj.host, binlog_obj.port)
 
     def parse(self):
-        variable_data = self.variable_data
-        db_columns_info = get_columns_info_from_db(self.db_name.decode(), self.tb_name.decode(), self.db_info)
-        field_list = list(variable_data.read(self.columns_len))
-        self.metadata_len = byte2int8(variable_data.read(1))
-
         if not self.tables_map.get(self.table_id) and \
             self.db_name.decode() not in self.skip_databases and \
             self.tb_name.decode() not in self.skip_tables:
+            db_columns_info = get_columns_info_from_db(self.db_name.decode(), self.tb_name.decode(), self.db_info)
+            variable_data = self.variable_data
+            field_list = list(variable_data.read(self.columns_len))
+            self.metadata_len = byte2int8(variable_data.read(1))
 
             _table = Table(self.table_id, self.db_name, self.tb_name)
 
@@ -453,12 +452,13 @@ class WriteRowsEvent(BinlogEvent):
 
 
 class DeleteRowsEvent(BinlogEvent):
-    def __init__(self, header, body):
+    def __init__(self, header, body, main_obj):
         super(DeleteRowsEvent, self).__init__(header, body)
         # self.body = body
         table_id = byte2int48(self.body.table_id)
         self._table = self.tables_map.get(table_id)
         self.skip = False
+        self.skip_pk = main_obj.skip_pk
 
         if self._table:
             self.tb_name = self._table.table_name.decode()
@@ -514,8 +514,12 @@ class DeleteRowsEvent(BinlogEvent):
     def rollback_sql(self):
         if not self.skip:
             self._dump_variable()
-            _keys = self.row_data.keys()
-            _values = self.row_data.values()
+            _row_data = self.row_data.copy()
+            if self.skip_pk:
+                _row_data.pop(self._table.pk)
+
+            _keys = _row_data.keys()
+            _values = _row_data.values()
 
             _keys_str = ','.join(map(lambda x: '`{}`'.format(x), _keys))
             _values_str = []

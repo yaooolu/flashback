@@ -63,7 +63,7 @@ class MyBinlog(object):
         self.start_pos = kwargs.get('start_pos')
         self.end_file = kwargs.get('end_file')
 
-        self.type = kwargs.get('type')
+        self.dml_type = kwargs.get('type')
         self.table = kwargs.get('table')
 
         self.server_id = kwargs.get('server_id')
@@ -72,6 +72,8 @@ class MyBinlog(object):
 
         if self.rollback:
             self.list = False
+        if self.dml_type == 'insert':
+            self.dml_type = 'write'
 
     def connect_db(self):
         """
@@ -160,14 +162,17 @@ class MyBinlog(object):
             mockdata = BytesIO(_packet_data)
             header, body = Event(mockdata).parse()
 
-            if self.start_datetime and (self.start_datetime > header.timestamp):
-                continue
-
-            if self.end_datetime and (self.end_datetime < header.timestamp):
-                break
-
             type_name = event_types.get(int.from_bytes(header.type_code, 'little'))
             _event = None
+
+            if self.start_datetime and (self.start_datetime > header.timestamp) and type_name != 'TableMapEvent':
+                continue
+
+            if self.end_datetime and (self.end_datetime <= header.timestamp):
+                break
+
+            if self.dml_type and type_name != 'TableMapEvent' and ("{}RowsEvent".format(self.dml_type.title()) != type_name):
+                continue
 
             if type_name == 'QueryEvent':
                 _event = QueryEvent(header, body)
@@ -195,7 +200,7 @@ class MyBinlog(object):
                     self.conn_pool.execute(_event.rollback_sql())
 
             elif type_name == 'DeleteRowsEvent':
-                _event = DeleteRowsEvent(header, body)
+                _event = DeleteRowsEvent(header, body, self)
                 if self.list:
                     print(_event.excute_info())
                 elif self.rollback:
