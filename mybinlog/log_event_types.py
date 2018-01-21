@@ -286,7 +286,7 @@ class QueryEvent(BinlogEvent):
         db_name_len = byte2int8(body.db_name_len)
         self.db_name = variable_data.read(db_name_len)
         variable_data.read(1)
-        self.query = variable_data.read(len_variable_data - status_block_len - db_name_len - self.crc_len)
+        self.query = variable_data.read(len_variable_data - status_block_len - 1 - db_name_len - self.crc_len)
         _query = self.query.decode('utf-8')
         _query_re = re.search(r'alter +table +(.*?) .*', _query)
         if _query_re:

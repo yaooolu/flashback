@@ -17,7 +17,7 @@ class Event(object):
         if event_types[type_code] == "StopEvent":
             return
 
-        body = globals().get(event_types.get(type_code), EventNotDefined).from_file(self.file, length=header.event_length - header.struct_size)
+        body = globals().get(event_types.get(type_code), EventNotDefined).from_file(self.file, length=header.event_length + 1 - header.struct_size)
 
         return (header, body)
         # unpack = struct.unpack('<cIcIIIH', self.file.read(20))
