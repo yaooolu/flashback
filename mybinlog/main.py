@@ -215,6 +215,7 @@ class MyBinlog(object):
                     if _info:
                         print(_info)
                 elif self.rollback:
+                    # print(_event.rollback_sql())
                     self.conn_pool.execute(_event.rollback_sql())
 
             elif type_name == 'RotateEvent':

@@ -35,6 +35,7 @@ class Structure(metaclass=StructureMeta):
     def __init__(self, bytedata):
         self._buffer = memoryview(bytedata)
         self.variable_part = self._buffer[self.struct_size:]
+        self.variable_part_len = len(self.variable_part)
 
     @classmethod
     def from_file(cls, f, offset=None, length=None):

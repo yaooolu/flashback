@@ -36,6 +36,11 @@ load_event = [
 ]
 
 
+begin_load_query_event = [
+    ('<i', 'file_id'),
+]
+
+
 new_load_event = [
     ('<i', 'thread_id'),
     ('<i', 'execute_time'),

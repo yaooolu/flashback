@@ -123,36 +123,47 @@ class Column(object):
         _field = ''
         if self.data_type == field_types.LONG:
             _field = signed(bytes2int(data.read(4)), 4)
+            self.use_len = 4
 
         elif self.data_type == field_types.FLOAT:
             _field = byte2float(data.read(self.meta_len))
+            self.use_len = self.meta_len
 
         elif self.data_type == field_types.DOUBLE:
             _field = byte2double(data.read(self.meta_len))
+            self.use_len = self.meta_len
 
         elif self.data_type == field_types.SHORT:
             _field = signed(bytes2int(data.read(self.meta_len)), self.meta_len)
+            self.use_len = self.meta_len
 
         elif self.data_type == field_types.TINY:
             _field = signed(bytes2int(data.read(1)), 1)
+            self.use_len = 1
 
         elif self.data_type == field_types.BLOB:
             field_len = bytes2int(data.read(self.meta_len))
             _field = data.read(field_len).decode(self.charset)
+            self.use_len = self.meta_len + self.field_len
 
         elif self.data_type == field_types.INT24:
             _field = signed(bytes2int(data.read(3)), 3)
+            self.use_len = 3
 
         elif self.data_type == field_types.VARCHAR:
             if self.meta_len <= 0xff:
                 field_len = byte2int8(data.read(1))
+                self.use_len = 1
             else:
                 field_len = byte2int16(data.read(2))
+                self.use_len = 2
             _field = data.read(field_len).decode(self.charset)
+            self.use_len += field_len
 
         elif self.data_type == field_types.JSON:
             field_len = byte2int8(data.read(1))
             _field = data.read(field_len)
+            self.use_len = 1 + field_len
 
         elif self.data_type == field_types.DATE:
             # Date
@@ -161,10 +172,12 @@ class Column(object):
             _month = _date // 32 % 16
             _day = _date % 32
             _field = "%s-%02d-%02d" % (_year, _month, _day)
+            self.use_len = 3
 
         elif self.data_type == field_types.LONGLONG:
             # bigint
             _field = signed(bytes2int(data.read(8)), 8)
+            self.use_len = 8
 
         elif self.data_type == field_types.TIME2:
             _time = data.read(3).hex()
@@ -173,18 +186,22 @@ class Column(object):
             _m = int(_time_bin_str[12:18], 2)
             _s = int(_time_bin_str[18:24], 2)
 
+            self.use_len = 3
             if self.fsp != 0:
                 fsp_storage = [0, 1, 1, 2, 2, 3, 3]
                 _fsp = data.read(fsp_storage[self.fsp])
+                self.use_len += fsp_storage[self.fsp]
 
             _field = "%02d:%02d:%02d" % (_h, _m, _s)
 
         elif self.data_type == field_types.TIMESTAMP2:
             _timestamp = bytes2int(data.read(4), 'big')
+            self.use_len = 4
 
             if self.fsp != 0:
                 fsp_storage = [0, 1, 1, 2, 2, 3, 3]
                 _fsp = data.read(fsp_storage[self.fsp])
+                self.use_len += fsp_storage[self.fsp]
 
             _field = _timestamp
 
@@ -202,10 +219,12 @@ class Column(object):
             _h = int(_date_bin_str[23:28], 2)
             _m = int(_date_bin_str[28:34], 2)
             _s = int(_date_bin_str[34:40], 2)
+            self.use_len = 5
 
             if self.fsp != 0:
                 fsp_storage = [0, 1, 1, 2, 2, 3, 3]
                 _fsp = data.read(fsp_storage[self.fsp])
+                self.use_len += fsp_storage[self.fsp]
 
             _field = "%s-%02d-%02d %02d:%02d:%02d" % (_year, _month, _day, _h, _m, _s)
 
@@ -214,6 +233,7 @@ class Column(object):
             _decimals = self.meta_len >> 8
             _precision = self.meta_len & 0xff
             bin_size = my_decimal_get_binary_size(_decimals, _precision)
+            self.use_len = bin_size
 
             compress_bytes = [0, 1, 1, 2, 2, 3, 3, 4, 4, 4]
             integer_length = _precision - _decimals
@@ -365,7 +385,7 @@ class TableMapEvent(BinlogEvent):
                 _column.data_type = val
                 _column.charset = _charset
 
-                if is_pk:
+                if is_pk == 'PRI':
                     _table.pk = _column_name
 
                 if val == field_types.VARCHAR:
@@ -410,29 +430,38 @@ class WriteRowsEvent(BinlogEvent):
         if self._table:
             self.tb_name = self._table.table_name.decode()
             self.db_name = self._table.db_name.decode()
-            self.row_data = {}
+            self.row_data = []
         else:
             self.skip = True
 
     def _dump_variable(self):
         variable_data = BytesIO(self.body.variable_part)
         columns_len = byte2int8(variable_data.read(1))
-        columns_is_used = bytes2int(variable_data.read((columns_len + 7) // 8))
-        columns_is_null = bytes2int(variable_data.read((columns_len + 7) // 8))
-        columns = self._table.columns
+        left_len = self.body.variable_part_len - 1
+        bit_len = (columns_len + 7) // 8
+        columns_is_used = bytes2int(variable_data.read(bit_len))
+        left_len -= bit_len
 
-        index = 0
-        fields = []
-        field_list_len = len(columns)
-        while columns_is_null >= 0 and index < field_list_len:
-            if columns_is_null % 2 == 0:
-                fields.append(columns[index])
-            columns_is_null //= 2
-            index += 1
+        while left_len != self.crc_len:
+            columns_is_null = bytes2int(variable_data.read(bit_len))
+            left_len -= bit_len
+            columns = self._table.columns
+            _row = {}
 
-        for _index, field in enumerate(fields):
-            _field = field.parse(variable_data)
-            self.row_data[field.column_name] = _field
+            index = 0
+            fields = []
+            field_list_len = len(columns)
+            while columns_is_null >= 0 and index < field_list_len:
+                if columns_is_null % 2 == 0:
+                    fields.append(columns[index])
+                columns_is_null //= 2
+                index += 1
+
+            for _index, field in enumerate(fields):
+                _field = field.parse(variable_data)
+                _row[field.column_name] = _field
+                left_len -= field.use_len
+            self.row_data.append(_row)
 
     def dumps(self):
         if not self.skip:
@@ -443,21 +472,25 @@ class WriteRowsEvent(BinlogEvent):
     def excute_info(self):
         if not self.skip:
             self._dump_variable()
-            _keys = self.row_data.keys()
-            _values = self.row_data.values()
+            _keys = self.row_data[0].keys()
+            all_values = map(lambda x: x.values(), self.row_data)
 
             _keys_str = ','.join(map(lambda x: '`{}`'.format(x), _keys))
-            _values_str = []
-            for val in _values:
-                if isinstance(val, Decimal):
-                    _values_str.append(str(val))
-                elif isinstance(val, str):
-                    _values_str.append('"{}"'.format(str(val)))
-                else:
-                    _values_str.append(str(val))
-            _values_str = ','.join(_values_str)
+            all_str = []
+            for _values in all_values:
+                _values_str = []
+                for val in _values:
+                    if isinstance(val, Decimal):
+                        _values_str.append(str(val))
+                    elif isinstance(val, str):
+                        _values_str.append('"{}"'.format(str(val)))
+                    else:
+                        _values_str.append(str(val))
+                _values_str = '(' + ','.join(_values_str) + ')'
+                all_str.append(_values_str)
+            all_str = ','.join(all_str)
 
-            sql = 'insert into `%s`.`%s`(%s) values (%s)' % (self.db_name, self.tb_name, _keys_str, _values_str)
+            sql = 'insert into `%s`.`%s`(%s) values %s' % (self.db_name, self.tb_name, _keys_str, all_str)
 
             _timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.header.timestamp))
             return {
@@ -472,10 +505,17 @@ class WriteRowsEvent(BinlogEvent):
     def rollback_sql(self):
         if not self.skip:
             self._dump_variable()
-            _pk = self.row_data.get(self._table.pk)
-            if isinstance(_pk, str):
-                _pk = '"{}"'.format(_pk)
-            sql = 'delete from `%s`.`%s` where %s = %s' % (self.db_name, self.tb_name, self._table.pk, _pk)
+
+            all_pk = []
+            for _pk in self.row_data:
+                _p = _pk.get(self._table.pk)
+                if isinstance(_, str):
+                    _p = '"{}"'.format(_p)
+                all_pk.append(_p)
+
+            all_pk = '(' + ','.join(all_pk) + ')'
+
+            sql = 'delete from `%s`.`%s` where %s in %s' % (self.db_name, self.tb_name, self._table.pk, all_pk)
             return sql
         return ''
 
@@ -492,30 +532,39 @@ class DeleteRowsEvent(BinlogEvent):
         if self._table:
             self.tb_name = self._table.table_name.decode()
             self.db_name = self._table.db_name.decode()
-            self.row_data = {}
+            self.row_data = []
         else:
             self.skip = True
 
     def _dump_variable(self):
         variable_data = BytesIO(self.body.variable_part)
         columns_len = byte2int8(variable_data.read(1))
-        columns_is_used = bytes2int(variable_data.read((columns_len + 7) // 8))
-        columns_is_null = bytes2int(variable_data.read((columns_len + 7) // 8))
+        left_len = self.body.variable_part_len - 1
+        bit_len = (columns_len + 7) // 8
+        columns_is_used = bytes2int(variable_data.read(bit_len))
+        left_len -= bit_len
 
-        columns = self._table.columns
+        while left_len != self.crc_len:
+            columns_is_null = bytes2int(variable_data.read(bit_len))
+            left_len -= bit_len
 
-        index = 0
-        fields = []
-        field_list_len = len(columns)
-        while columns_is_null >= 0 and index < field_list_len:
-            if columns_is_null % 2 == 0:
-                fields.append(columns[index])
-            columns_is_null //= 2
-            index += 1
+            columns = self._table.columns
 
-        for _index, field in enumerate(fields):
-            _field = field.parse(variable_data)
-            self.row_data[field.column_name] = _field
+            index = 0
+            fields = []
+            field_list_len = len(columns)
+            while columns_is_null >= 0 and index < field_list_len:
+                if columns_is_null % 2 == 0:
+                    fields.append(columns[index])
+                columns_is_null //= 2
+                index += 1
+
+            _row = {}
+            for _index, field in enumerate(fields):
+                _field = field.parse(variable_data)
+                left_len -= field.use_len
+                _row[field.column_name] = _field
+            self.row_data.append(_row)
 
     def dumps(self):
         if not self.skip:
@@ -526,10 +575,15 @@ class DeleteRowsEvent(BinlogEvent):
     def excute_info(self):
         if not self.skip:
             self._dump_variable()
-            _pk = self.row_data.get(self._table.pk)
-            if isinstance(_pk, str):
-                _pk = '"{}"'.format(_pk)
-            sql = 'delete from `%s`.`%s` where %s = %s' % (self.db_name, self.tb_name, self._table.pk, _pk)
+            all_pk = map(lambda x: x.get(self._table.pk), self.row_data)
+            _all_pk = []
+            for _pk in all_pk:
+                if isinstance(_pk, str):
+                    _pk = '"{}"'.format(_pk)
+                _all_pk.append(str(_pk))
+            _all_pk = '(' + ','.join(_all_pk) + ')'
+
+            sql = 'delete from `%s`.`%s` where %s in %s' % (self.db_name, self.tb_name, self._table.pk, _all_pk)
             _timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.header.timestamp))
             return {
                 "timestamp": _timestamp,
@@ -545,23 +599,27 @@ class DeleteRowsEvent(BinlogEvent):
             self._dump_variable()
             _row_data = self.row_data.copy()
             if self.skip_pk:
-                _row_data.pop(self._table.pk)
+                [_row.pop(self._table.pk) for _row in _row_data]
 
-            _keys = _row_data.keys()
-            _values = _row_data.values()
+            _keys = _row_data[0].keys()
+            all_values = map(lambda x: x.values(), _row_data)
 
             _keys_str = ','.join(map(lambda x: '`{}`'.format(x), _keys))
-            _values_str = []
-            for val in _values:
-                if isinstance(val, Decimal):
-                    _values_str.append(str(val))
-                elif isinstance(val, str):
-                    _values_str.append('"{}"'.format(str(val)))
-                else:
-                    _values_str.append(str(val))
-            _values_str = ','.join(_values_str)
+            all_str = []
+            for _values in all_values:
+                _values_str = []
+                for val in _values:
+                    if isinstance(val, Decimal):
+                        _values_str.append(str(val))
+                    elif isinstance(val, str):
+                        _values_str.append('"{}"'.format(str(val)))
+                    else:
+                        _values_str.append(str(val))
+                _values_str = '(' + ','.join(_values_str) + ')'
+                all_str.append(_values_str)
+            all_str = ','.join(all_str)
 
-            sql = 'insert into `%s`.`%s`(%s) values (%s)' % (self.db_name, self.tb_name, _keys_str, _values_str)
+            sql = 'insert into `%s`.`%s`(%s) values %s' % (self.db_name, self.tb_name, _keys_str, all_str)
             return sql
         return ''
 
@@ -578,46 +636,60 @@ class UpdateRowsEvent(BinlogEvent):
             self.tb_name = self._table.table_name.decode()
             self.db_name = self._table.db_name.decode()
 
-            self.before_row_data = {}
-            self.row_data = {}
+            self.before_row_data = []
+            self.row_data = []
         else:
             self.skip = True
 
     def _dump_variable(self):
         variable_data = BytesIO(self.body.variable_part)
         columns_len = byte2int8(variable_data.read(1))
-        columns_is_used = bytes2int(variable_data.read((columns_len + 7) // 8))
-        columns_is_used_update = bytes2int(variable_data.read((columns_len + 7) // 8))
-        columns_is_null = bytes2int(variable_data.read((columns_len + 7) // 8))
+        left_len = self.body.variable_part_len - 1
+        bit_len = (columns_len + 7) // 8
+        columns_is_used = bytes2int(variable_data.read(bit_len))
+        left_len -= bit_len
+        columns_is_used_update = bytes2int(variable_data.read(bit_len))
+        left_len -= bit_len
 
-        columns = self._table.columns
-        index = 0
-        fields = []
-        field_list_len = len(columns)
-        while columns_is_null >= 0 and index < field_list_len:
-            if columns_is_null % 2 == 0:
-                fields.append(columns[index])
-            columns_is_null //= 2
-            index += 1
+        while left_len != self.crc_len:
+            columns_is_null = bytes2int(variable_data.read(bit_len))
+            left_len -= bit_len
 
-        for _index, field in enumerate(fields):
-            _field = field.parse(variable_data)
-            self.before_row_data[field.column_name] = _field
+            columns = self._table.columns
+            index = 0
+            fields = []
+            field_list_len = len(columns)
+            while columns_is_null >= 0 and index < field_list_len:
+                if columns_is_null % 2 == 0:
+                    fields.append(columns[index])
+                columns_is_null //= 2
+                index += 1
 
-        columns_is_null = bytes2int(variable_data.read((columns_len + 7) // 8))
-        index = 0
-        fields = []
-        field_list_len = len(columns)
+            _before_row = {}
+            for _index, field in enumerate(fields):
+                _field = field.parse(variable_data)
+                left_len -= field.use_len
+                _before_row[field.column_name] = _field
+            self.before_row_data.append(_before_row)
 
-        while columns_is_null >= 0 and index < field_list_len:
-            if columns_is_null % 2 == 0:
-                fields.append(columns[index])
-            columns_is_null //= 2
-            index += 1
+            columns_is_null = bytes2int(variable_data.read(bit_len))
+            left_len -= bit_len
+            index = 0
+            fields = []
+            field_list_len = len(columns)
 
-        for _index, field in enumerate(fields):
-            _field = field.parse(variable_data)
-            self.row_data[field.column_name] = _field
+            while columns_is_null >= 0 and index < field_list_len:
+                if columns_is_null % 2 == 0:
+                    fields.append(columns[index])
+                columns_is_null //= 2
+                index += 1
+
+            _row = {}
+            for _index, field in enumerate(fields):
+                _field = field.parse(variable_data)
+                left_len -= field.use_len
+                _row[field.column_name] = _field
+            self.row_data.append(_row)
 
     def dumps(self):
         if not self.skip:
